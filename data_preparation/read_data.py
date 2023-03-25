@@ -6,6 +6,7 @@ import numpy as np
 import datetime
 from dateutil.relativedelta import relativedelta
 from pandas.api.types import is_numeric_dtype
+import selectors
 
 
 class CycleCols:
@@ -59,8 +60,7 @@ def read_historical_data(inputs_folder_name):
     his_data_category_cols = gen_cols.his_data_categ_cols
     _dtypes = {c: str for c in his_data_category_cols}
 
-    _df = pd.read_excel(_excel_con, sheet_name='Historical Data 2', dtype=_dtypes,
-                        converters={'Description': str.strip})
+    _df = pd.read_excel(_excel_con, sheet_name='Historical Data 2', dtype=_dtypes)
 
     for col in his_data_category_cols:
         _df[col] = _df[col].str.strip()
@@ -244,86 +244,75 @@ def historical_absolute_launches_data(inputs_folder_name):
 # print(historical_absolute_launches_data("inputs_folder_name"))
 
 
-def historic_data(inputs_folder_name):
-    _df = base_historical_data(inputs_folder_name)
+def historic_data(inputs_folder_name, fc_dim_sel):
+    # Load historical data
+    df = base_historical_data(inputs_folder_name)
 
-    _cat_cols_new_name = gen_cols.his_data_category_cols_new_name()
-    # Drops null rows
-    _non_date_cols = _cat_cols_new_name + gen_cols.his_data_cycle_rel_cols
-    _date_cols = [col for col in _df if col not in _non_date_cols]
-    _df_dates = _df[_date_cols]
-    indexes_to_keep = _df_dates.loc[~(_df_dates == 0).all(axis=1)].index
-    _df = _df.loc[indexes_to_keep]
+    # Drop rows with all date values equal to 0
+    date_cols = [col for col in df.columns if col not in gen_cols.his_data_category_cols_new_name() +
+                 gen_cols.his_data_cycle_rel_cols]
+    indexes_to_keep = df[date_cols].loc[~(df[date_cols] == 0).all(axis=1)].index
+    df = df.loc[indexes_to_keep]
 
     # Sort dataframe
-    _df = _df.sort_values(by=_cat_cols_new_name, ascending=True)
+    df = df.sort_values(by=gen_cols.his_data_category_cols_new_name(), ascending=True)
 
-    _absolute_launches = historical_absolute_launches_data(inputs_folder_name)
-    _launches_by_similarity = historical_launches_by_similarity_data(inputs_folder_name)
-
-    _df = pd.concat([_df, _absolute_launches, _launches_by_similarity])
+    # Load and concatenate absolute launches and launches by similarity data
+    abs_launches = historical_absolute_launches_data(inputs_folder_name)
+    launches_by_similarity = historical_launches_by_similarity_data(inputs_folder_name)
+    df = pd.concat([df, abs_launches, launches_by_similarity])
 
     # Remove None columns
-    _cols = [col for col in _df if col != 'None']
-    _df = _df[_cols]
+    df = df.drop(columns='None', errors='ignore')
 
     # Replace date columns
-    _old_columns = _df.columns.tolist()
-    _hist_dates_index = CycleCols(inputs_folder_name)
-    _hist_dates_index = _hist_dates_index.hist_dates_index
-    _new_columns = _old_columns[:len(_old_columns)-len(_hist_dates_index)] + _hist_dates_index.tolist()
-    _df.columns = _new_columns
+    hist_dates_index = CycleCols(inputs_folder_name).hist_dates_index
+    old_columns = df.columns.tolist()
+    new_columns = old_columns[:len(old_columns)-len(hist_dates_index)] + hist_dates_index.tolist()
+    df.columns = new_columns
 
-    # Remove empty rows
-    _df = _df.dropna(how='all', subset=_cat_cols_new_name)
+    # Remove empty rows and fill missing values
+    df[gen_cols.generic_description] = df[gen_cols.generic_description].fillna('None')
+    for col in gen_cols.his_data_category_cols_new_name():
+        if col != gen_cols.generic_description:
+            df[col] = df[col].fillna('None')
 
-    # Prevent error if empty description
-    generic_description = gen_cols.generic_description
-    if pd.isnull(_df[generic_description]).all():
-        _df[generic_description] = _df[generic_description].fillna('None')
-
-    for col in _cat_cols_new_name:
-        if col != generic_description:
-            _df[col] = _df[col].fillna('None')
-
-        # Convert category columns to string
-        if is_numeric_dtype(_df[col]):
-            _df[col] = _df[col].astype(int).astype(str)
-        else:
-            _df[col] = _df[col].astype(str)
-        _df[col] = _df[col].str.strip()
+    # Convert category columns to string
+    for col in gen_cols.his_data_category_cols_new_name():
+        if is_numeric_dtype(df[col]):
+            df[col] = df[col].astype(int)
+        df[col] = df[col].astype(str).str.strip()
 
     # Convert integer columns
     for col in gen_cols.his_data_cycle_rel_cols:
-        if is_numeric_dtype(_df[col]):
-            _df[col] = _df[col].astype(int)
+        if is_numeric_dtype(df[col]):
+            df[col] = df[col].astype(int)
 
     # Melt date columns
-    _non_date_cols = _cat_cols_new_name + gen_cols.his_data_cycle_rel_cols
-    _date_cols = [col for col in _df if col not in _non_date_cols]
-    _df = _df.melt(id_vars=_non_date_cols, value_vars=_date_cols, var_name='Date', value_name='Value')
+    non_date_cols = gen_cols.his_data_category_cols_new_name() + gen_cols.his_data_cycle_rel_cols
+    date_cols = [col for col in df.columns if col not in non_date_cols]
+    df = df.melt(id_vars=non_date_cols, value_vars=date_cols, var_name='Date', value_name='Value')
 
     # Transform date columns
-    _df['Date'] = pd.to_datetime(_df['Date'], format='%Y-%m-%d', errors='raise')
+    df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='raise')
 
     # Remove dimensions with only None values
-    forecast_dims = gen_cols.ForecastDims(0)
-    for col in forecast_dims.forecast_dims_sel:
+    forecast_dims = selectors.ForecastDims(fc_dim_sel)
+    """for col in forecast_dims.value:
         if col != gen_cols.generic_family:
-            _dim_values = _df[col].unique().tolist()
-            if len(_dim_values) == 1 and _dim_values[0] == 'None':
-                _df = _df.drop(columns=col)
+            dim_values = df[col].unique().tolist()
+            if len(dim_values) == 1 and dim_values[0] == 'None':
+                df = df.drop(columns=col)"""
 
     # Unify generic SKU with Description
     generic_sku = gen_cols.generic_sku
-    if generic_sku in _df:
-        _df[generic_sku] = _df[generic_sku] + np.where((_df[generic_description] == 'None') |
-                                                       (_df[generic_description] == ''), '', '__' +
-                                                       _df[generic_description])
-    _df = _df.drop(columns=generic_description).reset_index(drop=True)
+    if generic_sku in df:
+        df[generic_sku] = df[generic_sku] + np.where((df[gen_cols.generic_description] == 'None') |
+                                                     (df[gen_cols.generic_description] == ''), '', '__' +
+                                                     df[gen_cols.generic_description])
+    df = df.drop(columns=gen_cols.generic_description).reset_index(drop=True)
 
-    return _df
+    return df
 
-
+# receives folder name and forecast dim selection as parameters
 # print(historic_data("inputs_folder_name"))
-
