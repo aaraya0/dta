@@ -26,6 +26,17 @@ def his_data_category_cols_new_name():
     return his_data_categ_cols_new_name
 
 
+generic_data = his_data_category_cols_new_name()
+generic_sku = generic_data[6]
+generic_family = generic_data[0]
+generic_region = generic_data[1]
+generic_salesman = generic_data[2]
+generic_client = generic_data[3]
+generic_category = generic_data[4]
+generic_subcategory = generic_data[5]
+generic_description = generic_data[7]
+
+
 def new_name_cols_cat_dict():
     _keys_list = his_data_categ_cols
     _values_list = his_data_category_cols_new_name()
@@ -36,3 +47,14 @@ def new_name_cols_cat_dict():
 
 def all_forecast_dimensions():
     return pd.Index([col for col in his_data_category_cols_new_name() if col != 'Description'])
+
+
+class ForecastDims:
+    def __init__(self, value):
+        _dimensions = all_forecast_dimensions()
+        if value == 0:
+            self.forecast_dims_sel = _dimensions
+        else:
+            self.forecast_dims_sel = _dimensions[value-1]
+
+
