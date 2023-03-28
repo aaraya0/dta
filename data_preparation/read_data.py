@@ -1,12 +1,11 @@
-import pandas as pd
 import os
 import public_variables.refreshes
 import generic_columns_name_mo.generic_columns_name as gen_cols
 import numpy as np
 import datetime
 from dateutil.relativedelta import relativedelta
-from pandas.api.types import is_numeric_dtype
-import selectors
+from pandas.core.dtypes.common import is_numeric_dtype
+import pandas as pd
 
 
 class CycleCols:
@@ -71,23 +70,7 @@ def read_historical_data(inputs_folder_name):
     return _df
 
 
-# print(read_historical_data("inputs_folder_name"))
-
-
-def read_launches_by_similarity_data(inputs_folder_name):
-    _ref = public_variables.refreshes.refresh_hist_inputs()
-
-    _excel_con = pd.ExcelFile(os.path.join(inputs_folder_name, 'Launches and Discontinued Data.xlsx'))
-    _dtypes = {c: str for c in gen_cols.his_data_categ_cols}
-    _df = pd.read_excel(_excel_con, sheet_name='Launches by Similarity', dtype=_dtypes)
-    for col in gen_cols.his_data_categ_cols:
-        _df[col] = _df[col].str.strip()
-    # _run_new_indexes_name = change_dim_indexes_name
-    _df = _df.rename(columns=gen_cols.new_name_cols_cat_dict())
-    return _df
-
-
-# print(read_launches_by_similarity_data("inputs_folder_name"))
+print(read_historical_data("inputs_folder_name"))
 
 
 def read_absolute_launches_data(inputs_folder_name):
@@ -103,7 +86,7 @@ def read_absolute_launches_data(inputs_folder_name):
     return _df
 
 
-# print(read_absolute_launches_data("inputs_folder_name"))
+print(read_absolute_launches_data("inputs_folder_name"))
 
 
 def read_sku_allocation_matrix(inputs_folder_name):
@@ -117,7 +100,7 @@ def read_sku_allocation_matrix(inputs_folder_name):
     return _df
 
 
-# print(read_sku_allocation_matrix("inputs_folder_name"))
+print(read_sku_allocation_matrix("inputs_folder_name"))
 
 
 def sku_allocation_matrix(inputs_folder_name):
@@ -141,7 +124,7 @@ def sku_allocation_matrix(inputs_folder_name):
     return matrix_with_desc
 
 
-# print(sku_allocation_matrix("inputs_folder_name"))
+print(sku_allocation_matrix("inputs_folder_name"))
 
 
 def base_historical_data(inputs_folder_name):
@@ -174,31 +157,7 @@ def base_historical_data(inputs_folder_name):
     return hist_data
 
 
-# print(base_historical_data("inputs_folder_name"))
-
-
-def historical_launches_by_similarity_data(inputs_folder_name):
-    hist_data = base_historical_data(inputs_folder_name)
-    rel_cols = gen_cols.his_data_cycle_rel_cols
-    description_col = gen_cols.generic_description
-    sim_data = read_launches_by_similarity_data(inputs_folder_name)
-    if len(sim_data) > 0:
-        similarity_launches = sim_data.iloc[:, :8].copy()
-        historical_data = read_historical_data(inputs_folder_name)
-        df = similarity_launches.merge(historical_data[rel_cols], on=rel_cols, how='left')
-        df[description_col] = similarity_launches[description_col]
-        df.fillna(0, inplace=True)
-        cycle_cols = CycleCols(inputs_folder_name)
-        df['Starting Year'] = cycle_cols.starting_year
-        df['Starting Period'] = cycle_cols.starting_period
-        df['Periods Per Year'] = cycle_cols.periods_per_year if len(hist_data) > 0 else None
-        df['Periods Per Cycle'] = cycle_cols.periods_per_cycle
-    else:
-        df = pd.DataFrame()
-    return df
-
-
-# print(historical_launches_by_similarity_data("inputs_folder_name"))
+print(base_historical_data("inputs_folder_name"))
 
 
 def historical_absolute_launches_data(inputs_folder_name):
@@ -241,10 +200,10 @@ def historical_absolute_launches_data(inputs_folder_name):
     return df
 
 
-# print(historical_absolute_launches_data("inputs_folder_name"))
+print(historical_absolute_launches_data("inputs_folder_name"))
 
 
-def historic_data(inputs_folder_name, fc_dim_sel):
+def historic_data(inputs_folder_name):
     # Load historical data
     df = base_historical_data(inputs_folder_name)
 
@@ -259,8 +218,7 @@ def historic_data(inputs_folder_name, fc_dim_sel):
 
     # Load and concatenate absolute launches and launches by similarity data
     abs_launches = historical_absolute_launches_data(inputs_folder_name)
-    launches_by_similarity = historical_launches_by_similarity_data(inputs_folder_name)
-    df = pd.concat([df, abs_launches, launches_by_similarity])
+    df = pd.concat([df, abs_launches])
 
     # Remove None columns
     df = df.drop(columns='None', errors='ignore')
@@ -297,7 +255,7 @@ def historic_data(inputs_folder_name, fc_dim_sel):
     df['Date'] = pd.to_datetime(df['Date'], format='%Y-%m-%d', errors='raise')
 
     # Remove dimensions with only None values
-    forecast_dims = selectors.ForecastDims(fc_dim_sel)
+    # forecast_dims = selectors.ForecastDims(fc_dim_sel)
     """for col in forecast_dims.value:
         if col != gen_cols.generic_family:
             dim_values = df[col].unique().tolist()
@@ -314,5 +272,6 @@ def historic_data(inputs_folder_name, fc_dim_sel):
 
     return df
 
+
 # receives folder name and forecast dim selection as parameters
-# print(historic_data("inputs_folder_name"))
+print(historic_data("inputs_folder_name"))
