@@ -1,7 +1,8 @@
-from flask import request
+from flask import request, jsonify, Blueprint
 from models import db, FileRef
 from ..Login.login import app, get_current_user
 from data_preparation import read_data
+
 
 with app.app_context():
     db.create_all()
@@ -37,5 +38,15 @@ def save_df(file):
         dataframe.to_sql(file.filename+' '+user_id, con=db, if_exists='replace', chunksize=1000)
     return "File saved to database"
 
+
 @app.route('/files/<string:user_id>', methods=['GET'])
-def get_files (user_id):
+def get_files(user_id):
+    files_list = FileRef.query.filter_by(user_id=user_id)
+    for file in files_list:
+        return jsonify({
+            "id": file.id,
+            "file_name": file.file_name,
+            "upload_date": file.upload_date,
+        })
+
+files = Blueprint('files', __name__)

@@ -4,6 +4,7 @@ from flask_bcrypt import Bcrypt
 from config import ApplicationConfig
 from models import db, User
 from flask_session import Session
+from Files.file_manager import files
 
 
 app = Flask(__name__)
@@ -75,6 +76,9 @@ def login_user():
 def logout_user():
     session.pop("user_id")
     return "200"
+
+
+app.register_blueprint(files)
 
 
 if __name__ == "__main__":

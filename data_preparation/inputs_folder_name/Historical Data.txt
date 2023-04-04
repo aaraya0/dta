@@ -1,0 +1,7 @@
+Family	Region	Salesman	Client	Category	Subcategory	SKU	Description	Starting Year	Starting Period	Periods Per Year	Periods Per Cycle
+Family1	Region1	Salesman1	client1	cat1	subcat1	TIAMOU0SAMARE04	TINTA OFFSET AMARILLO CROMIA SL/LETTER UV	2020	1	4	2
+											
+											
+											
+											
+											
