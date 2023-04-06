@@ -1,5 +1,5 @@
-import public_variables.refreshes
-import generic_columns_name_mo.generic_columns_name as gen_cols
+import data_preparation.public_variables.refreshes as refreshes
+import data_preparation.generic_columns_name_mo.generic_columns_name as gen_cols
 import numpy as np
 import datetime
 from dateutil.relativedelta import relativedelta
@@ -65,7 +65,7 @@ def read_historical_data(file):
 
 
 def read_absolute_launches_data(file):
-    _ref = public_variables.refreshes.refresh_hist_inputs()
+    _ref = refreshes.refresh_hist_inputs()
     _dtypes = {c: str for c in gen_cols.his_data_category_cols}
     _df = pd.read_excel(file, sheet_name='Absolute Launches', dtype=_dtypes)
     for col in gen_cols.his_data_category_cols:
@@ -74,7 +74,7 @@ def read_absolute_launches_data(file):
 
 
 def read_sku_allocation_matrix(file):
-    _ref = public_variables.refreshes.refresh_hist_inputs()
+    _ref = refreshes.refresh_hist_inputs()
     _dtypes = {c: str for c in ['SKU from', 'SKU to']}
     _df = pd.read_excel(file, sheet_name='Allocation Matrix', dtype=_dtypes)
     for col in ['SKU from', 'SKU to']:
@@ -167,9 +167,6 @@ def historical_absolute_launches_data(file):
         df = pd.DataFrame()
 
     return df
-
-
-print(historical_absolute_launches_data("inputs_folder_name"))
 
 
 def historic_data(file):

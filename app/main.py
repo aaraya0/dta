@@ -1,21 +1,17 @@
-from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 from flask_bcrypt import Bcrypt
-from config import ApplicationConfig
-from models import db, User
-from flask_session import Session
-from Files.file_manager import files
+from flask import request, jsonify, session
+import Files.file_manager as file
+from Login.models import db, User, create_app
+import Login.login as login
 
-
-app = Flask(__name__)
-app.config.from_object(ApplicationConfig)
-bcrypt = Bcrypt(app)
-cors = CORS(app, supports_credentials=True)
-server_session = Session(app)
-db.init_app(app)
+app = create_app()
 
 with app.app_context():
+    engine = db.engine
     db.create_all()
+bcrypt = Bcrypt(app)
+cors = CORS(app, supports_credentials=True)
 
 
 @app.route("/@me", methods=["GET"])
@@ -23,7 +19,7 @@ def get_current_user():
     user_id = session.get("user_id")
     if not user_id:
         return jsonify({"error": "Unauthorized"}), 401
-    user = User.query.filter_by(id=user_id).first()
+    user = db.session.query(User).filter_by(id=user_id).first()
     return jsonify({
         "id": user.id,
         "email": user.email,
@@ -73,13 +69,22 @@ def login_user():
 
 
 @app.route("/logout", methods=["POST"])
-def logout_user():
-    session.pop("user_id")
-    return "200"
+def logout():
+    login.logout_user()
 
 
-app.register_blueprint(files)
+@app.route('/upload', methods=['POST'])
+def upload():
+    file.upload_file()
+    return 'File Uploaded Successfully'
+
+
+@app.route('/files', methods=['GET'])
+def get_files():
+    user_id = get_current_user()
+    file.get_files(user_id)
 
 
 if __name__ == "__main__":
+
     app.run(debug=True)
