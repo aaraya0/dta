@@ -13,14 +13,12 @@ excel_blueprint = Blueprint('excel', __name__)
 @excel_blueprint.route('/upload', methods=['POST'])
 def upload_file():
     file = request.files['file']
-    user = get_current_user().json["id"]
-    new_file = FileRef(file_name=file.filename, user_id=user)
+    user_id = get_current_user().json["id"]
+    new_file = FileRef(file_name=file.filename, user_id=user_id)
     db.session.add(new_file)
     db.session.commit()
     save_df(file)
     response = jsonify({'message': 'Upload successful!'})
-    response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin'))
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
     return response
 
 # obtener todos los nombres y fecha de los archivos subidos por un determinado usuario
@@ -41,7 +39,7 @@ def save_df(file):
     excel_file = pd.ExcelFile(file)
     dataframe = pd.read_excel(excel_file, sheet_name=0)
     dataframe = dataframe.astype(str)  # Convert all columns to string type
-    table_name = file.filename[:-5]+ '_' + user_id
+    table_name = file.filename[:-5] + '_' + user_id
     if len(table_name) > 64:
         table_name = "launches_discontinued" + '_' + user_id
     dataframe.to_sql(table_name, db.engine, if_exists="replace")

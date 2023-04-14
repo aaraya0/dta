@@ -44,7 +44,7 @@ def register_user():
         "id": new_user.id,
         "email": new_user.email,
         "name": new_user.name
-    })
+    }), 200
 
 
 @login_blueprint.route("/login", methods=["POST"])
