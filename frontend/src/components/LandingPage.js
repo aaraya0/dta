@@ -1,6 +1,7 @@
 import React, {useState, useEffect} from 'react';
 import {User} from "../types";
 import httpClient from "../httpClient";
+import "./landing.css"
 const LandingPage: React.FC = () =>{
     const [user, setUser]= useState(User)
 
@@ -19,10 +20,10 @@ const LandingPage: React.FC = () =>{
 
     return (
     <div>
-    <h1>Welcomeeeee</h1>
+    <h1>Welcome</h1>
     {user != null ? (
     <div>
-    <h2> HI, {user.name}!! YOU ARE LOGGED IN </h2>
+    <h2> HI, {user.name}! YOU ARE LOGGED IN </h2>
     <h3> Email: {user.email} </h3>
     <button onClick={logoutUser}>Logout</button>
     </div>

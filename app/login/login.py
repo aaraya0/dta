@@ -1,7 +1,7 @@
 from flask import Blueprint
 from flask import jsonify, session, request
 from flask_bcrypt import Bcrypt
-
+from flask_cors import CORS, cross_origin
 from app.database import User, db
 
 login_blueprint = Blueprint('login', __name__)
@@ -26,6 +26,7 @@ def get_current_user():
 
 
 @login_blueprint.route("/register", methods=["POST"])
+@cross_origin(supports_credentials=True)
 def register_user():
     email = request.json["email"]
     password = request.json["password"]
@@ -48,6 +49,7 @@ def register_user():
 
 
 @login_blueprint.route("/login", methods=["POST"])
+@cross_origin(supports_credentials=True)
 def login_user():
     email = request.json["email"]
     password = request.json["password"]
@@ -67,6 +69,7 @@ def login_user():
 
 
 @login_blueprint.route("/logout", methods=["POST"])
+@cross_origin(supports_credentials=True)
 def logout_user():
     session.pop("user_id")
     return "200"

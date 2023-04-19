@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ARIMA Predictions</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div id="plot"></div>
+    <script>
+        var data = {{ graphJSON | safe }};
+        Plotly.newPlot('plot', data);
+    </script>
+</body>
+</html>

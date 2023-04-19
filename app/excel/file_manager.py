@@ -1,10 +1,11 @@
 import pandas as pd
 from flask import Blueprint
-from flask import request, jsonify
+from flask import request, jsonify, make_response
 
 from app.database import db
 from app.database.models import FileRef, DataSelectors
 from app.login import get_current_user
+from flask_cors import CORS, cross_origin
 
 # crea las rutas para exportar
 excel_blueprint = Blueprint('excel', __name__)
@@ -23,6 +24,7 @@ def upload_file():
 
 # obtener todos los nombres y fecha de los archivos subidos por un determinado usuario
 @excel_blueprint.route('/files', methods=['GET'])
+@cross_origin(supports_credentials=True)
 def get_files(user_id):
     files_list = FileRef.query.filter_by(user_id=user_id)
     for file in files_list:
@@ -46,6 +48,7 @@ def save_df(file):
 
 # subir selectores para la preparacion de datos
 @excel_blueprint.route("/data_sel", methods=["POST"])
+@cross_origin(supports_credentials=True)
 def data_selection():
 
     run_mode = request.json["run_mode"]
