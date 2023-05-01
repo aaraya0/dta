@@ -1,1 +1,1 @@
-from .arima import arima_blueprint
+from .fc_models import models_blueprint

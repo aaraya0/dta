@@ -4,7 +4,7 @@ from flask_session import Session
 import sys
 sys.path.append('C:\\Users\\Usuario\\OneDrive\\Escritorio\\2023\\Forecasting\\dta')
 from app.excel import excel_blueprint
-from app.models import arima_blueprint
+from app.models import models_blueprint
 from app.login import login_blueprint, bcrypt
 from app.login.config import ApplicationConfig
 from app.database import db
@@ -19,7 +19,7 @@ server_session = Session(app)
 bcrypt.init_app(app)
 app.register_blueprint(login_blueprint)
 app.register_blueprint(excel_blueprint)
-app.register_blueprint(arima_blueprint)
+app.register_blueprint(models_blueprint)
 db.init_app(app)
 CORS(app)
 # crea tablas de la bd
