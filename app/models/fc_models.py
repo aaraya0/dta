@@ -9,6 +9,10 @@ from flask_cors import cross_origin
 from flask import jsonify, request
 import pmdarima as pm
 from sklearn.linear_model import LinearRegression
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import plotly.graph_objs as go
+import plotly.offline as pyo
+from dateutil.relativedelta import relativedelta
 
 models_blueprint = Blueprint('models', __name__)
 
@@ -17,24 +21,29 @@ models_blueprint = Blueprint('models', __name__)
 @cross_origin(supports_credentials=True)
 def testing_model():
     json_data = request.json
+    test_p = json_data.get("test_p")
+    if not test_p:
+        return jsonify({'message': 'Missing parameters'}), 400
+    pred_p = json_data.get("prediction_p")
+    if not pred_p:
+        return jsonify({'message': 'Missing parameters'}), 400
+    df = get_hist_data()
+    result = best_model(df, test_p, pred_p)
+    writer = pd.ExcelWriter('prediction_results.xlsx', engine='xlsxwriter')
+    result.to_excel(writer, sheet_name='result', index=True)
+    writer.save()
+    return jsonify({'message': 'Model results saved to prediction_results.xlsx'}), 200
+
+@models_blueprint.route("/graph", methods=["POST"])
+@cross_origin(supports_credentials=True)
+def testing_graph():
+    json_data = request.json
     prediction_p = json_data.get("prediction_p")
     if not prediction_p:
         return jsonify({'message': 'Missing parameters'}), 400
     df = get_hist_data()
-    result_1 = linear_regression_predictions(df, prediction_p)
-    result_2 = arima_predictions(df, prediction_p)
-    result_3 = exp_smoothing_predictions(df, prediction_p)
-    writer = pd.ExcelWriter('prediction_results.xlsx', engine='xlsxwriter')
-    df.to_excel(writer, sheet_name='data', index=False)
-    result_1[0].to_excel(writer, sheet_name='result_reg', index=True)
-    result_1[1].to_excel(writer, sheet_name='error_reg', index=True)
-    result_2[0].to_excel(writer, sheet_name = 'result_arima', index = True)
-    result_2[1].to_excel(writer, sheet_name = 'error_arima', index = True)
-    result_3[0].to_excel(writer, sheet_name = 'result_exp', index = True)
-    result_3[1].to_excel(writer, sheet_name = 'error_exp', index = True)
-    writer.save()
-    return jsonify({'message': 'Model results saved to prediction_results.xlsx'}), 200
-
+    plot_predictions(df, prediction_p)
+    return jsonify({'message': 'Model results plotted'}), 200
 
 def get_hist_data():
     user = get_current_user().json["id"]
@@ -55,186 +64,382 @@ def get_hist_data():
 
 
 def mape_calc(df, model_name):
-    model_pred = df.xs(model_name, level='model')
-    original_data = df.xs('original', level='model')
-    error_list = []
-    for product in model_pred.index:
-        model_vals = model_pred.loc[product].fillna(0).values
-        original_vals = original_data.loc[product].fillna(0).values
-        mask = original_vals != 0
-        error = np.mean(np.abs((original_vals[mask] - model_vals[mask]) / original_vals[mask])) * 100
-        if np.isnan(error):
-            error = 100
-        error_list.append(error)
+    predicted_df = df.xs(model_name, level='model').iloc[:, -12:]
+    actual_df = df.xs('actual', level='model').iloc[:, -12:]
+    absolute_errors = []
+    for col in predicted_df.columns:
+        predicted_col = predicted_df[col]
+        actual_col = actual_df[col]
+        n = len(actual_col)
+        col_errors = []
+        for i in range(n):
+            if actual_col[i] == 0 and predicted_col[i] != 0:
+                col_errors.append(1)  # 100% de error relativo
+            else:
+                col_errors.append(abs(predicted_col[i] - actual_col[i]) / actual_col[i])
+        col_mape = sum(col_errors) / n * 100
+        absolute_errors.append(col_mape)
+    mape = sum(absolute_errors) / len(absolute_errors)
 
-    error_df = pd.DataFrame({'product': model_pred.index.get_level_values(0), 'error': error_list})
-    return error_df
+    return mape
 
 
-def arima_predictions(dataframe, prediction_periods):
-
+def best_model (dataframe, test_p, pred_p):
     df = dataframe.copy()
-
-    # Crea un dataframe vacío para almacenar los resultados de predicción
-    df_pred = pd.DataFrame(columns=['product', 'model',  'date', 'value'])
-
-    # Itera sobre cada fila del df original
+    df_pred = pd.DataFrame()
     for product, row in df.iterrows():
-        # se hace una serie de tiempo de cada producto solo con las filas de fecha
-        time_series = pd.Series(row.iloc[13:]).astype(float)
+        arima_df, arima_mape, future_pred_arima = arima_predictions(row, test_p, pred_p)
+        linear_df, linear_mape, future_pred_linear = linear_regression_predictions(row, test_p, pred_p)
+        exp_df, exp_mape, future_pred_exp = exp_smoothing_predictions(row, test_p, pred_p)
+        holt_df, holt_mape, future_pred_holt = holt_winters_predictions(row, test_p, pred_p)
 
-        # se seleccionan las columnas con periodos para entrenamiento y para prediccion
-        train_data = time_series[:-prediction_periods]
-        test_data = time_series.iloc[-prediction_periods:]
+        mape_list = [arima_mape, linear_mape, exp_mape, holt_mape]
+        best_model_idx = mape_list.index(min(mape_list))
 
-        # se seleccionan automaticamente los parametros para modelar el conjunto de entrenamiento
-        model = pm.auto_arima(train_data)
-        arima_order = model.order
-        # se calcula el modelo arima para los datos de entrenamiento
-        model = ARIMA(train_data, order=arima_order)
-        # se ajusta el modelo
-        model_fit = model.fit()
+        if best_model_idx == 0:
+            best_df = arima_df
+            best_df['MAPE'] = arima_mape
 
-        # en base al modelo ajustado, se hace el forecast sobre los datos a predecir,
-        # cada prediccion es un valor en el df
-        predictions = model_fit.forecast(len(test_data))
-        originals = model_fit.forecast(len(train_data))
+        elif best_model_idx == 1:
+            best_df = linear_df
+            best_df['MAPE'] = linear_mape
 
-        # se itera sobre los valores de entrenamiento y se completan los valores de prediccion y originales del df nuevo
-        for i, og in enumerate(originals):
-            # se toma la fecha de prediccion como el valor del indice de este valor
-            og_date = train_data.index[i]
-            df_pred = df_pred.append(
-                {'product': product, 'model': 'original', 'date': og_date, 'value': row[og_date]},
-                ignore_index = True)
-            df_pred = df_pred.append({'product': product, 'model': 'arima', 'date': og_date, 'value': og},
-                                     ignore_index = True)
+        elif best_model_idx == 2:
+            best_df = exp_df
+            best_df['MAPE'] = exp_mape
 
-        # se enumeran las preddiciones y se pasa por cada una en una misma fila
-        for i, pred in enumerate(predictions):
-            # se toma la fecha de prediccion como el valor del indice de este valor
-            pred_date = test_data.index[i]
-            # al df resultado se le agrega product (que es un contador de la fila), date (q es el indice de este valor)
-            # value (que es el valor que tiene la fila del indice que se tomo como fecha en el df original) y model (que
-            # indica que es el original) se ignora el indice porque ya esta el de producto
-            df_pred = df_pred.append(
-                {'product': product, 'model': 'original', 'date': pred_date, 'value': row[pred_date]},
-                ignore_index=True)
-            # tambien, por cada valor, se agrega una fila con el mismo valor de product (contador de filas), la misma
-            # fecha, el valor de la prediccion y la aclaracion de que el modelo es arima.
-            df_pred = df_pred.append({'product': product, 'model': 'arima', 'date': pred_date, 'value': pred},
-                                     ignore_index=True)
+        else:
+            best_df = holt_df
+            best_df['MAPE'] = holt_mape
 
-    # a cada valor del nuevo df en la columna date se lo convierte a datetime (antes era string, creo)
-    df_pred['date'] = pd.to_datetime(df_pred['date'], errors="ignore")
-    # genera una tabla mas "ancha" resumiendo y agrupando los datos por producto
-    df_pred_pivot = df_pred.pivot(index=['product', 'model'], columns='date', values='value')
+        df_pred = df_pred.append(best_df,  ignore_index=False)
 
-    mape_error = mape_calc(df_pred_pivot, 'arima')
-
-    return df_pred_pivot, mape_error
+    return df_pred
 
 
-def linear_regression_predictions(dataframe, prediction_periods):
-    df = dataframe.copy()
 
-    # Create an empty dataframe to store the prediction results
-    df_pred = pd.DataFrame(columns=['product', 'model', 'date', 'value'])
+def arima_predictions(fila, test_periods, prediction_periods):
+    df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
+                                      'sku', 'description', 'model', 'date', 'value'])
 
-    # Iterate over each row of the original df
-    for product, row in df.iterrows():
-        # Create a time series for each product using only the date columns
-        time_series = pd.Series(row.iloc[13:]).astype(float)
+    time_series = pd.Series(fila.iloc[13:]).astype(float)
+    train_data = time_series[:-test_periods]
 
-        # Split the time series into training and testing data
-        train_data = time_series[:-prediction_periods:]
-        test_data = time_series.iloc[-prediction_periods:]
+    test_data = time_series.iloc[-test_periods:]
+    n_train = len(train_data)
+# --------------------------------------------------------
+    model = pm.auto_arima(train_data)
+    arima_order = model.order
+    model = ARIMA(train_data, order=arima_order)
+    model_fit = model.fit()
 
-        # Fit a linear regression model to the training data
-        model = LinearRegression()
-        X_train = pd.DataFrame(pd.to_numeric(pd.to_datetime(train_data.index))).astype(int).values.reshape(-1, 1)
-        y_train = train_data.values.reshape(-1, 1)
-        model.fit(X_train, y_train)
+    train_predictions = model_fit.predict(start = 0, end = n_train - 1)
+    test_predictions = model_fit.predict(start = n_train, end = len(time_series) - 1)
 
-        # Use the model to make predictions on the testing data
-        X_test = pd.DataFrame(pd.to_numeric(pd.to_datetime(test_data.index))).astype(int).values.reshape(-1, 1)
-
-        # predictions = model.predict(X_test)
-        predictions = np.squeeze(model.predict(X_test))
-        # originals = model.predict(X_train)
-        originals = np.squeeze(model.predict(X_train))
-
-        for i, og in enumerate(originals):
-            # Take the prediction date as the index value for this row
-            og_date = train_data.index[i]
-            # Add a row to the result df with product, date, value, and model = 'original'
-            df_pred = df_pred.append(
-                {'product': product, 'model': 'original', 'date': og_date, 'value': row[og_date]},
-                ignore_index=True)
-            # Add a row to the result df with product, date, prediction value, and model = 'linear'
-            df_pred = df_pred.append({'product': product, 'model': 'linear', 'date': og_date, 'value': og},
-                                     ignore_index=True)
-
-        for i, pred in enumerate(predictions):
-            # Take the prediction date as the index value for this row
-            pred_date = test_data.index[i]
-            # Add a row to the result df with product, date, value, and model = 'original'
-            df_pred = df_pred.append(
-                {'product': product, 'model': 'original', 'date': pred_date, 'value': row[pred_date]},
-                ignore_index=True)
-            # Add a row to the result df with product, date, prediction value, and model = 'linear'
-            df_pred = df_pred.append({'product': product, 'model': 'linear', 'date': pred_date, 'value': pred},
-                                     ignore_index=True)
-
-    # Convert the date column of the new df to datetime format
-    df_pred['date'] = pd.to_datetime(df_pred['date'], errors="ignore")
-    # Pivot the data to create a wider table summarizing the results by product
-    df_pred_pivot = df_pred.pivot(index=['product', 'model'], columns='date', values='value')
-
-    mape_error = mape_calc(df_pred_pivot, 'linear')
-
-    return df_pred_pivot, mape_error
+# predictions = model_fit.predict(start=len(time_series), end = len(time_series)+prediction_periods-1)
+    model = ARIMA(test_data, order = arima_order)
+    model_fit = model.fit()
+    predictions = model_fit.forecast(prediction_periods)
 
 
-def exp_smoothing_predictions(dataframe, prediction_periods):
-    df = dataframe.copy()
+# --------------------------------------------------------
 
-    # Create an empty dataframe to store the prediction results
-    df_pred = pd.DataFrame(columns=['product', 'model', 'date', 'value'])
+    for i, og in enumerate(train_predictions):
 
-    # Iterate over each row of the original df
-    for product, row in df.iterrows():
-        # Create a time series for each product using only the date columns
-        time_series = pd.Series(row.iloc[13:]).astype(float)
+        og_date = train_data.index[i]
 
-        # Split the time series into training and testing data
-        train_data = time_series[:-prediction_periods:]
-        test_data = time_series.iloc[-prediction_periods:]
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region':fila.iloc[2] , 'salesman':fila.iloc[3], 'client':fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory':fila.iloc[6],
+                                  'sku':fila.iloc[7], 'description':fila.iloc[8], 'model':'actual',
+             'date': og_date, 'value':fila[og_date]}, ignore_index = True)
 
-        # Use Pandas' exponential smoothing function to create the model and make predictions
-        model = pd.Series(train_data).ewm(span=10).mean()
-        predictions = model[-prediction_periods:]
-        originals = model[:-prediction_periods]
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'arima',
+             'date': og_date, 'value': og}, ignore_index = True)
 
-        for i, og in enumerate(originals):
-            og_date = train_data.index[i]
-            df_pred = df_pred.append(
-                {'product': product, 'model': 'original', 'date': og_date, 'value': row[og_date]},
-                ignore_index=True)
-            df_pred = df_pred.append({'product': product, 'model': 'exp_smoothing', 'date': og_date, 'value': og},
-                                     ignore_index=True)
+    for i, test in enumerate(test_predictions):
 
-        for i, pred in enumerate(predictions):
-            pred_date = test_data.index[i]
-            df_pred = df_pred.append(
-                {'product': product, 'model': 'original', 'date': pred_date, 'value': row[pred_date]},
-                ignore_index=True)
-            df_pred = df_pred.append({'product': product, 'model': 'exp_smoothing', 'date': pred_date, 'value': pred},
-                                     ignore_index=True)
+        test_date = test_data.index[i]
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': test_date, 'value': fila[test_date]}, ignore_index = True)
 
-    df_pred['date'] = pd.to_datetime(df_pred['date'], errors="ignore")
-    df_pred_pivot = df_pred.pivot(index=['product', 'model'], columns='date', values='value')
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'arima',
+             'date':test_date, 'value':test},ignore_index = True)
 
-    mape_error = mape_calc(df_pred_pivot, 'exp_smoothing')
 
-    return df_pred_pivot, mape_error
+    df_pred_pivot = df_pred.pivot( values= 'value', index = ['family', 'region', 'salesman', 'client', 'category',
+                                                     'subcategory', 'sku', 'description', 'model'], columns = 'date')
+    mape = mape_calc(df_pred_pivot, 'arima')
+
+
+    return df_pred_pivot, mape, predictions
+
+
+def linear_regression_predictions(fila, test_periods, prediction_periods):
+    df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
+                                      'sku', 'description', 'model', 'date', 'value'])
+
+    time_series = pd.Series(fila.iloc[13:]).astype(float)
+    train_data = time_series[:-test_periods]
+    test_data = time_series.iloc[-test_periods:]
+    n_train = len(train_data)
+
+    model = LinearRegression()
+    X_train = pd.DataFrame(pd.to_numeric(pd.to_datetime(train_data.index))).astype(int).values.reshape(-1, 1)
+    y_train = train_data.values.reshape(-1, 1)
+    model.fit(X_train, y_train)
+
+    # Use the model to make predictions on the testing data
+    X_test = pd.DataFrame(pd.to_numeric(pd.to_datetime(test_data.index))).astype(int).values.reshape(-1, 1)
+
+    test_predictions = np.squeeze(model.predict(X_test))
+
+    train_predictions = np.squeeze(model.predict(X_train))
+    # Obtener la última fecha conocida en el conjunto de datos
+    last_date = test_data.index[-1]
+
+    future_dates = pd.date_range(last_date, periods = prediction_periods, freq = 'M')
+    X_future = pd.DataFrame(pd.to_numeric(pd.to_datetime(future_dates))).astype(int).values.reshape(-1, 1)
+    predictions = np.squeeze(model.predict(X_future))
+    print("LINEAR PREDICTIONS", predictions)
+
+    for i, og in enumerate(train_predictions):
+        og_date = train_data.index[i]
+        #
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3], 'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': og_date, 'value': fila[og_date]}, ignore_index = True)
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'linear',
+             'date': og_date, 'value': og}, ignore_index = True)
+
+    for i, test in enumerate(test_predictions):
+        test_date = test_data.index[i]
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': test_date, 'value': fila[test_date]}, ignore_index = True)
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'linear',
+             'date': test_date, 'value': test}, ignore_index = True)
+
+    df_pred_pivot = df_pred.pivot(values = 'value', index = ['family', 'region', 'salesman', 'client', 'category',
+                                                             'subcategory', 'sku', 'description', 'model'],
+                                  columns = 'date')
+
+    mape = mape_calc(df_pred_pivot, 'linear')
+    return df_pred_pivot, mape, predictions
+
+
+def exp_smoothing_predictions(fila, test_periods, prediction_periods):
+    df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
+                                      'sku', 'description', 'model', 'date', 'value'])
+
+    time_series = pd.Series(fila.iloc[13:]).astype(float)
+    train_data = time_series[:-test_periods]
+    test_data = time_series.iloc[-test_periods:]
+    n_train = len(train_data)
+
+    # Use Pandas' exponential smoothing function to create the model and make predictions
+    model = pd.Series(train_data).ewm(span=10).mean()
+    test_predictions = model[-test_periods:]
+    train_predictions = model[:-test_periods]
+    # Extend the time series with future dates
+    future_dates = pd.date_range(start = time_series.index[-1], periods = prediction_periods, freq = 'MS')
+    extended_series = time_series.append(pd.Series(index = future_dates))
+    # Make a prediction for the extended series
+    extended_model = pd.Series(extended_series[:n_train]).ewm(span = len(test_data)).mean()
+    predictions = extended_model[-prediction_periods:]
+
+    for i, og in enumerate(train_predictions):
+        og_date = train_data.index[i]
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3], 'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': og_date, 'value': fila[og_date]}, ignore_index = True)
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'exp_smooth',
+             'date': og_date, 'value': og}, ignore_index = True)
+
+    for i, test in enumerate(test_predictions):
+        test_date = test_data.index[i]
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': test_date, 'value': fila[test_date]}, ignore_index = True)
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'exp_smooth',
+             'date': test_date, 'value': test}, ignore_index = True)
+
+    df_pred_pivot = df_pred.pivot(values = 'value', index = ['family', 'region', 'salesman', 'client', 'category',
+                                                             'subcategory', 'sku', 'description', 'model'],
+                                  columns = 'date')
+    print(df_pred_pivot)
+    mape = mape_calc(df_pred_pivot, 'exp_smooth')
+
+    return df_pred_pivot, mape, predictions
+
+
+def holt_winters_predictions(fila, test_periods, prediction_periods):
+    df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
+                                      'sku', 'description', 'model', 'date', 'value'])
+
+    time_series = pd.Series(fila.iloc[13:]).astype(float)
+    train_data = time_series[:-test_periods]
+
+    test_data = time_series.iloc[-test_periods:]
+    n_train = len(train_data)
+
+    # Create the Holt-Winters model using the training data
+    model = ExponentialSmoothing(train_data, seasonal_periods=12, trend='add', seasonal='add')
+
+    # Fit the model
+    model_fit = model.fit()
+
+    # Make predictions on the testing data
+    test_predictions = model_fit.forecast(test_periods)
+
+    # Get the original values
+    train_predictions = model_fit.fittedvalues
+    predictions = model_fit.forecast(prediction_periods)
+
+    for i, og in enumerate(train_predictions):
+        og_date = train_data.index[i]
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3], 'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': og_date, 'value': fila[og_date]}, ignore_index = True)
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'holt_winters',
+             'date': og_date, 'value': og}, ignore_index = True)
+
+    for i, test in enumerate(test_predictions):
+        test_date = test_data.index[i]
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': test_date, 'value': fila[test_date]}, ignore_index = True)
+
+        df_pred = df_pred.append(
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
+             'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'holt_winters',
+             'date': test_date, 'value': test}, ignore_index = True)
+
+    df_pred_pivot = df_pred.pivot(values = 'value', index = ['family', 'region', 'salesman', 'client', 'category',
+                                                             'subcategory', 'sku', 'description', 'model'],
+                                  columns = 'date')
+    print(df_pred_pivot)
+    mape = mape_calc(df_pred_pivot, 'holt_winters')
+
+    return df_pred_pivot, mape, predictions
+
+
+def plot_predictions(dataframe, prediction_periods):
+    # Obtiene las predicciones y el error MAPE utilizando la función arima_predictions
+    df_arima = arima_predictions(dataframe, prediction_periods)
+    df_linear = linear_regression_predictions(dataframe, prediction_periods)
+    df_smooth = exp_smoothing_predictions(dataframe, prediction_periods)
+    df_holt = holt_winters_predictions(dataframe, prediction_periods)
+    df_arima = df_arima.reset_index()
+    df_linear = df_linear.reset_index()
+    df_smooth = df_smooth.reset_index()
+    df_holt = df_holt.reset_index()
+
+    df_original = df_arima[df_arima['model'] == 'original']
+    original_sales = df_original.iloc[:, 2:].sum()
+
+    df_linear = df_linear[df_linear['model'] == 'linear']
+    linear_sales = df_linear.iloc[:, 2:].sum()
+    df_arima= df_arima[df_arima['model'] == 'arima']
+    arima_sales = df_arima.iloc[:, 2:].sum()
+    df_smooth = df_smooth[df_smooth['model'] == 'exp_smoothing']
+    smooth_sales = df_smooth.iloc[:, 2:].sum()
+    df_holt = df_holt[df_holt['model'] == 'holt_winters']
+    holt_sales = df_holt.iloc[:, 2:].sum()
+
+    trace1 = go.Scatter(
+        x = original_sales.index,
+        y = original_sales.values,
+        name = 'Original'
+    )
+
+    trace2 = go.Scatter(
+        x = linear_sales.index,
+        y = linear_sales.values,
+        name = 'Linear Regression'
+    )
+    trace3 = go.Scatter(
+        x = arima_sales.index,
+        y = arima_sales.values,
+        name = 'Arima'
+    )
+    trace4 = go.Scatter(
+        x = smooth_sales.index,
+        y = smooth_sales.values,
+        name = 'Exponential Smoothing'
+    )
+    trace5 = go.Scatter(
+        x = holt_sales.index,
+        y = holt_sales.values,
+        name = 'Holt Winters'
+    )
+
+    data = [trace1, trace2, trace3, trace4, trace5]
+
+    layout = go.Layout(
+        title = 'Ventas por fecha',
+        xaxis = dict(title = 'Fecha'),
+        yaxis = dict(title = 'Ventas',  tickformat='.if')
+    )
+
+    fig = go.Figure(data = data, layout = layout)
+
+    pyo.plot(fig, filename='ventas.html')
+
+
