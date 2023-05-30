@@ -11,12 +11,11 @@ import pmdarima as pm
 from sklearn.linear_model import LinearRegression
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import plotly.graph_objs as go
-import plotly.offline as pyo
-from dateutil.relativedelta import relativedelta
 
 models_blueprint = Blueprint('models', __name__)
 
 
+# recibe parametros json, corre los modelos y guarda los resultados en un excel
 @models_blueprint.route("/model", methods=["POST"])
 @cross_origin(supports_credentials=True)
 def testing_model():
@@ -34,7 +33,9 @@ def testing_model():
     writer.save()
     return jsonify({'message': 'Model results saved to prediction_results.xlsx'}), 200
 
-@models_blueprint.route("/graph", methods=["POST"])
+
+# grafica los resultados
+"""@models_blueprint.route("/graph", methods=["POST"])
 @cross_origin(supports_credentials=True)
 def testing_graph():
     json_data = request.json
@@ -42,15 +43,16 @@ def testing_graph():
     if not prediction_p:
         return jsonify({'message': 'Missing parameters'}), 400
     df = get_hist_data()
-    # plot_predictions(df, prediction_p)
-    return jsonify({'message': 'Model results plotted'}), 200
+    plot_predictions(df, prediction_p)
+    return jsonify({'message': 'Model results plotted'}), 200"""
 
 
+# busca el df en la bd y procesa los datos para su correcto analisis
 def get_hist_data():
     user = get_current_user().json["id"]
     table_name = "historical data_" + user
     df = pd.read_sql_table(table_name, db.engine.connect())
-
+    # a partir de la 13 son las columnas de fecha
     df.iloc[:, 13:] = df.iloc[:, 13:].replace(to_replace=["NaN", "null", "nan"], value=np.nan)
     df.iloc[:, 13:] = df.iloc[:, 13:].fillna(0).apply(pd.to_numeric, errors='coerce').values
 
@@ -64,6 +66,7 @@ def get_hist_data():
     return df
 
 
+# calculo mape
 def mape_calc(df, model_name):
     predicted_df = df.xs(model_name, level='model').iloc[:, -12:]
     actual_df = df.xs('actual', level='model').iloc[:, -12:]
@@ -85,7 +88,8 @@ def mape_calc(df, model_name):
     return mape
 
 
-def best_model (dataframe, test_p, pred_p):
+# eleccion mejor modelo segun el menor mape para cada producto
+def best_model(dataframe, test_p, pred_p):
     df = dataframe.copy()
     df_pred = pd.DataFrame()
 
@@ -94,11 +98,6 @@ def best_model (dataframe, test_p, pred_p):
         linear_df, linear_mape = linear_regression_predictions(row, test_p, pred_p)
         exp_df, exp_mape = exp_smoothing_predictions(row, test_p, pred_p)
         holt_df, holt_mape = holt_winters_predictions(row, test_p, pred_p)
-
-    # -------------------------------------------------------------------
-
-    # -------------------------------------------------------------------
-
 
         mape_list = [arima_mape, linear_mape, exp_mape, holt_mape]
         best_model_idx = mape_list.index(min(mape_list))
@@ -121,9 +120,11 @@ def best_model (dataframe, test_p, pred_p):
 
         df_pred = df_pred.append(best_df,  ignore_index=False)
     plot_predictions(df_pred)
+
     return df_pred
 
 
+# predicciones arima
 def arima_predictions(fila, test_periods, prediction_periods):
     df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
                                       'sku', 'description', 'model', 'date', 'value'])
@@ -141,27 +142,22 @@ def arima_predictions(fila, test_periods, prediction_periods):
 
     train_predictions = model_fit.predict(start = 0, end = n_train - 1)
     test_predictions = model_fit.predict(start = n_train, end = len(time_series) - 1)
-
 # -------------------------------------------------------------
     start_date = pd.to_datetime(test_data.index[-1])
     next_month = start_date + pd.DateOffset(months = 1)
     future_dates = pd.date_range(start = next_month, periods = prediction_periods, freq = 'MS')
     future_dates = future_dates.strftime('%Y-%m-%d')
     future_predictions = model_fit.forecast(prediction_periods)
-
-
-
 # -------------------------------------------------------------
-
     for i, og in enumerate(train_predictions):
 
         og_date = train_data.index[i]
 
         df_pred = df_pred.append(
-            {'family': fila.iloc[1], 'region':fila.iloc[2] , 'salesman':fila.iloc[3], 'client':fila.iloc[4],
-             'category': fila.iloc[5], 'subcategory':fila.iloc[6],
-                                  'sku':fila.iloc[7], 'description':fila.iloc[8], 'model':'actual',
-             'date': og_date, 'value':fila[og_date]}, ignore_index = True)
+            {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3], 'client': fila.iloc[4],
+             'category': fila.iloc[5], 'subcategory': fila.iloc[6],
+             'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'actual',
+             'date': og_date, 'value': fila[og_date]}, ignore_index = True)
 
         df_pred = df_pred.append(
             {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3],
@@ -185,11 +181,10 @@ def arima_predictions(fila, test_periods, prediction_periods):
              'client': fila.iloc[4],
              'category': fila.iloc[5], 'subcategory': fila.iloc[6],
              'sku': fila.iloc[7], 'description': fila.iloc[8], 'model': 'arima',
-             'date':test_date, 'value':test},ignore_index = True)
+             'date': test_date, 'value': test}, ignore_index = True)
 
-
-    df_pred_pivot = df_pred.pivot( values= 'value', index = ['family', 'region', 'salesman', 'client', 'category',
-                                                     'subcategory', 'sku', 'description', 'model'], columns = 'date')
+    df_pred_pivot = df_pred.pivot(values= 'value', index = ['family', 'region', 'salesman', 'client', 'category',
+                                  'subcategory', 'sku', 'description', 'model'], columns = 'date')
     mape = mape_calc(df_pred_pivot, 'arima')
 
     for i, future in enumerate(future_dates):
@@ -209,13 +204,14 @@ def arima_predictions(fila, test_periods, prediction_periods):
              'date': fut_date, 'value': future_predictions[i]}, ignore_index = True)
 
     df_pred_fc_pivot = df_pred_fc.pivot(values = 'value', index = ['family', 'region', 'salesman', 'client', 'category',
-                                                             'subcategory', 'sku', 'description', 'model'],
-                                  columns = 'date')
+                                        'subcategory', 'sku', 'description', 'model'],
+                                        columns = 'date')
     result = pd.concat([df_pred_pivot, df_pred_fc_pivot], axis = 1)
 
     return result, mape
 
 
+# prediccion regresion lineal
 def linear_regression_predictions(fila, test_periods, prediction_periods):
     df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
                                       'sku', 'description', 'model', 'date', 'value'])
@@ -225,17 +221,16 @@ def linear_regression_predictions(fila, test_periods, prediction_periods):
     train_data = time_series[:-test_periods]
     test_data = time_series.iloc[-test_periods:]
 
-
     model = LinearRegression()
-    X_train = pd.DataFrame(pd.to_numeric(pd.to_datetime(train_data.index))).astype(int).values.reshape(-1, 1)
+    x_train = pd.DataFrame(pd.to_numeric(pd.to_datetime(train_data.index))).astype(int).values.reshape(-1, 1)
     y_train = train_data.values.reshape(-1, 1)
-    model.fit(X_train, y_train)
+    model.fit(x_train, y_train)
 
     # Use the model to make predictions on the testing data
-    X_test = pd.DataFrame(pd.to_numeric(pd.to_datetime(test_data.index))).astype(int).values.reshape(-1, 1)
+    x_test = pd.DataFrame(pd.to_numeric(pd.to_datetime(test_data.index))).astype(int).values.reshape(-1, 1)
 
-    test_predictions = np.squeeze(model.predict(X_test))
-    train_predictions = np.squeeze(model.predict(X_train))
+    test_predictions = np.squeeze(model.predict(x_test))
+    train_predictions = np.squeeze(model.predict(x_train))
 
 # --------------------------------------------------------------------
     start_date = pd.to_datetime(test_data.index[-1])
@@ -243,10 +238,8 @@ def linear_regression_predictions(fila, test_periods, prediction_periods):
     future_dates = pd.date_range(start = next_month, periods = prediction_periods, freq = 'MS')
     future_dates = future_dates.strftime('%Y-%m-%d')
 
-
-    X_future = pd.DataFrame(pd.to_numeric(pd.to_datetime(future_dates))).astype(int).values.reshape(-1, 1)
-    future_predictions = np.squeeze(model.predict(X_future))
-
+    x_future = pd.DataFrame(pd.to_numeric(pd.to_datetime(future_dates))).astype(int).values.reshape(-1, 1)
+    future_predictions = np.squeeze(model.predict(x_future))
     # ----------------------------------------------------------------
     for i, og in enumerate(train_predictions):
         og_date = train_data.index[i]
@@ -286,7 +279,7 @@ def linear_regression_predictions(fila, test_periods, prediction_periods):
 
     mape = mape_calc(df_pred_pivot, 'linear')
 
-    for i, future in  enumerate(future_dates):
+    for i, future in enumerate(future_dates):
         fut_date = future_dates[i]
         df_pred_fc = df_pred_fc.append(
             {'family': fila.iloc[1], 'region': fila.iloc[2], 'salesman': fila.iloc[3], 'client': fila.iloc[4],
@@ -309,6 +302,7 @@ def linear_regression_predictions(fila, test_periods, prediction_periods):
     return result, mape
 
 
+# predicciones suavizacion exponencial
 def exp_smoothing_predictions(fila, test_periods, prediction_periods):
     df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
                                       'sku', 'description', 'model', 'date', 'value'])
@@ -316,7 +310,6 @@ def exp_smoothing_predictions(fila, test_periods, prediction_periods):
     time_series = pd.Series(fila.iloc[13:]).astype(float)
     train_data = time_series[:-test_periods]
     test_data = time_series.iloc[-test_periods:]
-
 
     # Use Pandas' exponential smoothing function to create the model and make predictions
     model = pd.Series(train_data).ewm(span=10).mean()
@@ -331,7 +324,6 @@ def exp_smoothing_predictions(fila, test_periods, prediction_periods):
     future_dates = future_dates.strftime('%Y-%m-%d')
 
     future_predictions = model.ewm(span=10, min_periods=0).mean().iloc[-1:].repeat(len(future_dates))
-
     # -------------------------------------------------------
     for i, og in enumerate(train_predictions):
         og_date = train_data.index[i]
@@ -393,6 +385,7 @@ def exp_smoothing_predictions(fila, test_periods, prediction_periods):
     return result, mape
 
 
+# predicciones holt winters
 def holt_winters_predictions(fila, test_periods, prediction_periods):
     df_pred = pd.DataFrame(columns = ['family', 'region', 'salesman', 'client', 'category', 'subcategory',
                                       'sku', 'description', 'model', 'date', 'value'])
@@ -401,7 +394,6 @@ def holt_winters_predictions(fila, test_periods, prediction_periods):
     train_data = time_series[:-test_periods]
 
     test_data = time_series.iloc[-test_periods:]
-
 
     # Create the Holt-Winters model using the training data
     model = ExponentialSmoothing(train_data, seasonal_periods=12, trend='add', seasonal='add')
@@ -414,13 +406,12 @@ def holt_winters_predictions(fila, test_periods, prediction_periods):
     # Get the original values
     train_predictions = model_fit.fittedvalues
 # -----------------------------------------------------------------------
-
     start_date = pd.to_datetime(test_data.index[-1])
     next_month = start_date + pd.DateOffset(months = 1)
     future_dates = pd.date_range(start = next_month, periods = prediction_periods, freq = 'MS')
     future_dates = future_dates.strftime('%Y-%m-%d')
     future_predictions = model_fit.forecast(prediction_periods)
-    # -----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 
     for i, og in enumerate(train_predictions):
         og_date = train_data.index[i]
@@ -483,40 +474,52 @@ def holt_winters_predictions(fila, test_periods, prediction_periods):
     return result, mape
 
 
-
+# graficar predicciones
 def plot_predictions(df_pred):
+    # Leer todos los posibles valores del índice "family"
+    family_values = df_pred.index.get_level_values('family').unique()
 
-    df_pred = df_pred.reset_index()
+    # Solicitar al usuario seleccionar un valor del índice "family"
+    selected_family = input(f"Selecciona un valor de 'family' entre {family_values}: ")
 
+    # Filtrar el DataFrame por el valor seleccionado del índice "family"
+    filtered_df = df_pred[df_pred.index.get_level_values('family') == selected_family]
 
-    df_actual = df_pred[df_pred['model'] == 'actual'].iloc[:,9:]
-    df_models = df_pred[~(df_pred['model'] == 'actual')].iloc[:,9:]
+    # Separar las filas en dos conjuntos según los valores del índice "model" (actual y otros)
+    actual_rows = filtered_df[filtered_df.index.get_level_values('model') == 'actual']
+    other_rows = filtered_df[filtered_df.index.get_level_values('model') != 'actual']
 
+    # Seleccionar las columnas de fecha
+    date_columns = df_pred.select_dtypes(include=['datetime']).columns
 
+    # Reemplazar NaN por 0 en las columnas de fechas
+    actual_rows[date_columns] = actual_rows[date_columns].fillna(0)
+    other_rows[date_columns] = other_rows[date_columns].fillna(0)
 
-    df_total_actual = df_actual.sum(axis = 1)
-    df_total_models = df_models.sum(axis = 1)
+    # Calcular la sumatoria de los valores para cada fecha en el conjunto "actual"
+    actual_sum = actual_rows[date_columns].sum()
 
-    trace1 = go.Scatter(
-        x = df_total_actual.index,
-        y = df_total_actual.values,
-        name = 'Actual'
-    )
+    # Calcular la sumatoria de los valores para cada fecha en el conjunto "otros"
+    other_sum = other_rows[date_columns].sum()
 
-    trace2 = go.Scatter(
-        x = df_total_models.index,
-        y = df_total_models.values,
-        name = 'Prediccion'
-    )
+    # Crear el gráfico
+    fig = go.Figure()
 
-    data = [trace1, trace2]
+    # Agregar línea para la sumatoria de los valores en el conjunto "actual"
+    fig.add_trace(go.Scatter(
+        x=date_columns,
+        y=actual_sum,
+        mode='lines',
+        name='Actual'
+    ))
 
-    layout = go.Layout(
-        title = 'Ventas por fecha',
-        xaxis = dict(title = 'Fecha'),
-        yaxis = dict(title = 'Ventas',  tickformat='.if')
-    )
+    # Agregar línea para la sumatoria de los valores en el conjunto "otros"
+    fig.add_trace(go.Scatter(
+        x=date_columns,
+        y=other_sum,
+        mode='lines',
+        name='Otros'
+    ))
 
-    fig = go.Figure(data = data, layout = layout)
-
-    pyo.plot(fig, filename='ventas.html')
+    # Mostrar el gráfico
+    fig.show()

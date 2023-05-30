@@ -1,5 +1,5 @@
-from flask import Flask, request, make_response
-from flask_cors import CORS, cross_origin
+from flask import Flask
+from flask_cors import CORS
 from flask_session import Session
 import sys
 sys.path.append('C:\\Users\\Usuario\\OneDrive\\Escritorio\\2023\\Forecasting\\dta')
@@ -14,14 +14,13 @@ app = Flask(__name__)
 app.config.from_object(ApplicationConfig)
 server_session = Session(app)
 
-
-
 bcrypt.init_app(app)
 app.register_blueprint(login_blueprint)
 app.register_blueprint(excel_blueprint)
 app.register_blueprint(models_blueprint)
 db.init_app(app)
 CORS(app)
+
 # crea tablas de la bd
 with app.app_context():
     engine = db.engine

@@ -1,7 +1,7 @@
 from flask import Blueprint
 from flask import jsonify, session, request
 from flask_bcrypt import Bcrypt
-from flask_cors import CORS, cross_origin
+from flask_cors import cross_origin
 from app.database import User, db
 
 login_blueprint = Blueprint('login', __name__)
@@ -73,4 +73,3 @@ def login_user():
 def logout_user():
     session.pop("user_id")
     return "200"
-
