@@ -477,24 +477,20 @@ def holt_winters_predictions(fila, test_periods, prediction_periods):
 # graficar predicciones
 def plot_predictions(df_pred):
     # Leer todos los posibles valores del índice "family"
-    family_values = df_pred.index.get_level_values('family').unique()
+    # family_values = df_pred.index.get_level_values('family').unique()
 
     # Solicitar al usuario seleccionar un valor del índice "family"
-    selected_family = input(f"Selecciona un valor de 'family' entre {family_values}: ")
+   # selected_family = input(f"Selecciona un valor de 'family' entre {family_values}: ")
 
     # Filtrar el DataFrame por el valor seleccionado del índice "family"
-    filtered_df = df_pred[df_pred.index.get_level_values('family') == selected_family]
+   # filtered_df = df_pred[df_pred.index.get_level_values('family') == selected_family]
 
     # Separar las filas en dos conjuntos según los valores del índice "model" (actual y otros)
-    actual_rows = filtered_df[filtered_df.index.get_level_values('model') == 'actual']
-    other_rows = filtered_df[filtered_df.index.get_level_values('model') != 'actual']
+    actual_rows = df_pred[df_pred.index.get_level_values('model') == 'actual']
+    other_rows = df_pred[df_pred.index.get_level_values('model') != 'actual']
 
     # Seleccionar las columnas de fecha
-    date_columns = df_pred.select_dtypes(include=['datetime']).columns
-
-    # Reemplazar NaN por 0 en las columnas de fechas
-    actual_rows[date_columns] = actual_rows[date_columns].fillna(0)
-    other_rows[date_columns] = other_rows[date_columns].fillna(0)
+    date_columns = df_pred.columns[9:]
 
     # Calcular la sumatoria de los valores para cada fecha en el conjunto "actual"
     actual_sum = actual_rows[date_columns].sum()
